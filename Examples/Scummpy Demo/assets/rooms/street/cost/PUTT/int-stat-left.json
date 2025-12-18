@@ -1,0 +1,9 @@
+{
+"framerate":10,
+"images":["ROOMS/ROOM4/COSTUMES/PUTTPUTT/int-stat-left.png"],
+"frames":[
+    [0, 0, 128, 128, 0, -139, -215],
+    [128, 0, 128, 128, 0, -139, -215]
+],
+"animations":{}
+}

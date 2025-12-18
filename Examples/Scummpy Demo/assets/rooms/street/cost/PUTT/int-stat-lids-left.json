@@ -1,0 +1,15 @@
+{
+"framerate":10,
+"images":["ROOMS/ROOM4/COSTUMES/PUTTPUTT/int-stat-lids-left.png"],
+"frames":[
+    [0, 0, 64, 64, 0, -235, -204],
+    [64, 0, 64, 64, 0, -235, -204],
+    [128, 0, 64, 64, 0, -235, -204],
+    [192, 0, 64, 64, 0, -235, -204]
+],
+"animations":{
+    "animation": {"speed": 1, "frames": [2]},
+    "rng": {"speed": 1, "frames": [0]},
+    "chk": {"speed": 1, "next": "chk", "frames": [1]}
+}
+}
