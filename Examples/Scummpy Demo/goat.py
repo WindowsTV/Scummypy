@@ -20,6 +20,14 @@ def init(engine) -> Room:
 
     room = Room(engine, ROOM_NAME, bg)
 
+    #create_hotspot(left, top, width, height, onClick):
+    exitToStreetRoom = room.create_hotspot(0, 178, 76, 192)
+    room.setup_clickpoint(exitToStreetRoom, lambda *_: exit(room, 1), Cursors.WEST)
+
+    exitToFlowerRoom = room.create_hotspot(left=579, top=245, width=60, height=96)
+    # room.setup_clickpoint(exitToFlowerRoom,  lambda room, engine: exit(room, exit_to=3, exit_actor=None), Cursors.EShallow)
+    room.setup_clickpoint(exitToFlowerRoom,  lambda *_: exit(room, exit_to=3, exit_actor=None), Cursors.EShallow)
+
     # attach script hooks as plain Python functions
     room.enter = lambda: enter(room, engine)
     room.destroy = lambda: destroy(room, engine)
@@ -33,16 +41,11 @@ def enter(room, engine) -> None:
     engine.game_state.set_flag("g_interfaceVisible", True) 
     engine.show_cursor()
 
+    room.entered_from = engine.game_state.get_flag("g_lastRoom")
+    if room.entered_from == 1:
+        print(f'[street.py] you came from the Street!')
+
     #engine.start_song(1, loop=True)
-
-    #create_hotspot(left, top, width, height, onClick):
-    exitToStreetRoom = room.create_hotspot(0, 178, 76, 192)
-    room.setup_clickpoint(exitToStreetRoom, lambda *_: exit(room, 1), Cursors.WEST)
-
-    exitToFlowerRoom = room.create_hotspot(left=579, top=245, width=60, height=96)
-    # room.setup_clickpoint(exitToFlowerRoom,  lambda room, engine: exit(room, exit_to=3, exit_actor=None), Cursors.EShallow)
-    room.setup_clickpoint(exitToFlowerRoom,  lambda *_: exit(room, exit_to=3, exit_actor=None), Cursors.EShallow)
-
 
 def onExitToStreetRoom(room, engine) -> None:
     print("Bye-Bye!")

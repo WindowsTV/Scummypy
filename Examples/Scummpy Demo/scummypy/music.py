@@ -132,8 +132,12 @@ class MusicSystem:
         KILL_MUSIC behavior:
         Stop all background music.
         """
-
+                    
         if self._current_handle:
+            if soft_kill is False:
+                self._last_song_id = self._current_song_id
+                self._current_song_id = STOP_MUSIC
+                self._current_handle.on_end_cb = lambda: None
             self._current_handle.stop()
             print("[music.py] kill_music()", self._current_handle.on_end_cb.__name__)
         

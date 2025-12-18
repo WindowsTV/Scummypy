@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import pygame
 import tkinter as tk
 from tkinter import simpledialog
@@ -9,7 +10,7 @@ from .system import InputDialog
 import scummypy.resources as Resources
 from .cursors import Cursors
 from .actor import ActorEvents
-from .audio import AudioManager, AudioEventScheduler
+from .audio import AudioHandle, AudioManager, AudioEventScheduler
 from .music import MusicSystem, Song
 
 class Engine:
@@ -25,22 +26,31 @@ class Engine:
 
         self.DEBUG: bool = False
         self.HOTSPOT_DRAWER_POINTS = [(None, None), (0, 0)]
-        pygame.key.set_repeat(80)
+        # pygame.key.set_repeat(80)
 
         self.clock = pygame.time.Clock()
         self.fps: int = fps
         self.title: str = title
         self.running: bool = False
-        self.input_blocked: bool = False
+        self.mouse_input_blocked: bool = False
+        self.key_input_blocked: bool = False
+
+        # [audio.py] SOUND_END = pygame.USEREVENT + 1
+        self.SCREEN_TEXT_EVENT: int = pygame.USEREVENT + 3
+        # [actor.py] ANIMATION_END = pygame.USEREVENT + 100
 
         self.interface = None
+        self.last_room = None
         self.current_room = None
+        self.current_skipable = callable
         self.room_registry = {}       # { "room_id": init(engine) }
         self.actor_table = {}
         self.sound_channels = {}
         self.audio_schedulers = []
         Cursors.load_all()
         self.Cursors = Cursors
+
+        self.screen_text = (None, None)
 
     def refocus_pygame(self):
         # Bring the Pygame window to the front
@@ -113,28 +123,100 @@ class Engine:
         if self.DEBUG: 
             print("[core.py] song_table:", song_table)
 
+    def register_talkies(self, talkie_table: dict):
+        """talkie_table: {id: (filename, text)}"""
+        self.talkie_table = talkie_table
+
+        if self.DEBUG: 
+            print("[core.py] talkie_table:", talkie_table)
+
     def register_audioEvents(self, get_position_func=None):
         scheduler = AudioEventScheduler(get_position_func)
         self.audio_schedulers.append(scheduler)
         return scheduler
 
-    def change_room(self, room_id: int):
+    def enter_modal_room(self, room_id: int):
+        # 1) Suspend current WORLD room (do NOT destroy)
+        if self.modal_room is not None:
+            raise RuntimeError("Modal already active")
+
+        if self.current_room is None:
+            raise RuntimeError("No world room to suspend")
+
+        self.suspended_world_room = self.current_room
+        self.suspended_world_room_id = self.game_state.get_flag("g_currentRoom") or 0
+        self.world_paused = True
+
+        # optional: stop actor AI/ticks if your room update drives that
+        # optional: stop SFX but keep music, up to you
+
+        # 2) Load modal room as the ACTIVE displayed room
+        factory = self.room_registry[room_id]
+        Resources.ROOM_PATH = factory[1]
+        self.modal_room = factory[0](self)
+        self.modal_room_id = room_id
+
+        # Route drawing/input to modal
+        self.modal_room.screen = self.screen
+
+        self.modal_room.enter()
+
+        # Cursor reset
+        self._handle_mouse_motion()
+
+    def change_room(self, room_id: int, skip_enter_func: bool = False):
+        if room_id is None or not isinstance(room_id, int):
+            raise TypeError(f"room_id must be int, got {type(room_id).__name__}")
+
         if room_id <= 0:
-            raise Exception("Room ID can not be 0 or lower!")
+            raise Exception("room_id can not be 0 or lower!")
+
+        # --- flags: last room + rolling last-3 room history ---
+        prev_room = int(self.game_state.get_flag("g_currentRoom"))  # int or None
+
+        # previous room
+        self.game_state.set_flag("g_lastRoom", prev_room)
+
+        # rolling history (last 3, newest first)
+        history = self.game_state.get_flag("g_previousRooms")
+        if not isinstance(history, list):
+            history = []
+
+        if isinstance(prev_room, int):
+            history.insert(0, int(prev_room))
+            # remove duplicates while keeping order
+            # history = list(dict.fromkeys(history))
+            # keep only last 3
+            history = history[:3]
+
+        self.game_state.set_flag("g_previousRooms", history)
+
+        # print(f'[core.py] g_lastRoom is {self.game_state.get_flag("g_lastRoom")}')
+        # print(f'[core.py] g_previousRooms is {self.game_state.get_flag("g_previousRooms")}')
 
         if self.current_room is not None:
             if hasattr(self.current_room, "destroy"):
                 self.current_room.destroy()
 
         self.audio.stop_all_but(self.music.music_channel)
+        if screen_text := self.screen_text[0]:
+            self.screen_text = (None, None)
+            pygame.time.set_timer(self.SCREEN_TEXT_EVENT, 0)  # Stop the timer
 
         if self.interface:
             self.interface.remove_all_actors()
             self.interface.enable_all_clickpoints()
 
         factory = self.room_registry[room_id]
+        Resources.ROOM_PATH = factory[1]
         self.current_room = factory[0](self)
-        self.current_room.enter()
+
+        if hasattr(self.current_room, "enter"):
+            self.current_room.enter()
+            if skip_enter_func is True:
+                if self.current_skipable and callable(self.current_skipable):
+                    self.current_skipable(self)
+
         self.current_room.screen = self.screen
 
         # Run this once to reset the mouse cursor..
@@ -146,30 +228,31 @@ class Engine:
             immediate_playback = factory[2].immediate_playback
             shuffle_pool = factory[2].shuffle_pool
 
-            print("[core.py] change_room()> b4 shuffle=", song_ids)
             if shuffle_pool is True:
                 self.music.shuffle_pool(song_ids)
-                print("[core.py] change_room()> after shuffle=", song_ids)
-            
+
             self.music.set_preferred_pool(song_ids)
-            #print("[core.py] self.music._current_song_id =", self.music._current_song_id)
-            
-            if self.music._current_song_id <= 0:
-                self.music.start_next_song_now()
-            elif immediate_playback is True:
-                if self.music._current_song_id not in self.music._current_pool:
+
+            if self.game_state.get_flag("g_musicMuted") is not True:
+                if self.music._current_song_id <= 0:
                     self.music.start_next_song_now()
+                elif immediate_playback is True:
+                    if self.music._current_song_id not in self.music._current_pool:
+                        self.music.start_next_song_now()
 
-        except Exception as err:
+        except Exception:
             pass
-
 
         if self.DEBUG:
             pygame.display.set_caption(f"{self.title} - room: {self.current_room.ROOM_NAME}")
 
+        # current room stays a single int
+        self.game_state.set_flag("g_currentRoom", room_id)
+
 
     def main_loop(self, start_room_id: int):
         if start_room_id:
+            self.start_room_id = start_room_id
             if self.DEBUG: 
                 print("[core.py] Start game in Room:", start_room_id)
             self.change_room(start_room_id)
@@ -190,15 +273,19 @@ class Engine:
                     self.running = False
                 elif event.type == self.audio.SOUND_END:
                     self.audio.on_audio_end()
+                elif event.type == self.SCREEN_TEXT_EVENT:
+                    self.screen_text = (None, None)
+                    pygame.time.set_timer(self.SCREEN_TEXT_EVENT, 0)  # Stop the timer
                 elif event.type == pygame.MOUSEMOTION:
                     self._handle_mouse_motion(event)
                 else:
-                    if not self.input_blocked:
+                    if not self.key_input_blocked:
                         if event.type == pygame.KEYDOWN:
                             self._handle_keydown(event)
                         if event.type == pygame.KEYUP:
                             self._handle_keyup(event)
-                            
+
+                    if not self.mouse_input_blocked:
                         if self.current_room:
                             self.current_room.handle_event(event)
                         if self.interface:
@@ -211,7 +298,11 @@ class Engine:
             if self.interface:
                 if self.game_state.get_flag("g_interfaceVisible") is True:
                     self.interface.update(dt)
-                    self.interface.draw(self.screen)            
+                    self.interface.draw(self.screen)   
+
+            if self.screen_text[0] is not None:
+                for surf, rect in self.screen_text:
+                    self.screen.blit(surf, rect)
 
             pygame.display.flip()
 
@@ -250,8 +341,18 @@ class Engine:
         pygame.mouse.set_cursor(cursor)
 
     def _handle_keydown(self, event):
-        #print("[core.py] _handle_keydown()> unicode=", event.unicode, "key=", event.key)
+        # print("[core.py] _handle_keydown()> unicode=", event.unicode, "key=", event.key)
+        if event.key == 27 or event.key == 115: #Escape Key or S Key
+            pygame.key.set_repeat(0)
+            if self.current_skipable and callable(self.current_skipable):
+                    self.current_skipable(self)
+                    self.current_skipable = None
+            else:
+                print("[core.py] Escape Pressed - no skipable, do a stop-line")
+
         if event.key == 1073742048: #CTRL Key
+            pygame.key.set_repeat(80)
+
             pos =  pygame.mouse.get_pos()
             if self.HOTSPOT_DRAWER_POINTS[0] is (None, None):
                 self.HOTSPOT_DRAWER_POINTS[0] = pos
@@ -274,7 +375,9 @@ class Engine:
     
     def show_prompt(self, promptType="input", title="Info", message="Unknown message"):
         # Block engine input while dialog is up
-        self.input_blocked = True
+        self.mouse_input_blocked = True
+        self.key_input_blocked = True
+
         pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_ARROW)
 
         msg_response = None
@@ -302,6 +405,7 @@ class Engine:
 
             # Restore input & cursor
             self.show_cursor(inputBlocked=False)
+            self.key_input_blocked = False
             self.refocus_pygame()
 
         return msg_response
@@ -310,7 +414,7 @@ class Engine:
     def hide_cursor(self, inputBlocked=False):
         self.game_state.set_flag("g_cursorVisible", False)
         #self.game_state.set_flag("g_inputDisabled", inputDisabled) 
-        self.input_blocked = inputBlocked
+        self.mouse_input_blocked = inputBlocked
 
         isCursorVisible = self.game_state.get_flag("g_cursorVisible")
         pygame.mouse.set_visible(isCursorVisible)
@@ -319,7 +423,7 @@ class Engine:
     def show_cursor(self, inputBlocked=False):
         self.game_state.set_flag("g_cursorVisible", True) 
         #self.game_state.set_flag("g_inputDisabled", inputDisabled)
-        self.input_blocked = inputBlocked
+        self.mouse_input_blocked = inputBlocked
 
         isCursorVisible = self.game_state.get_flag("g_cursorVisible")
         pygame.mouse.set_visible(isCursorVisible)
@@ -350,14 +454,256 @@ class Engine:
         if showCursor is True:
             self.show_cursor()
 
+    def show_text(
+        self,
+        text: str,
+        color: tuple = (255, 255, 255),
+        duration: float = 0,
+        position: tuple[int, int] = (4, 4),
+        outline_px: int = 2
+    ) -> None:
+        if not text:
+            return
+        
+        screen_text_enabled = self.game_state.get_flag("g_screenTextEnabled")
+        if screen_text_enabled != True:
+            return
+
+        if duration <= 0:
+            words = len(text.split())
+            duration = max(1200, words * 300)
+
+        font = pygame.font.SysFont("Arial Rounded MT Bold", 48, bold=False)
+        fg = color
+ 
+        outline = (0, 0, 0)
+
+        max_width = self.screen.get_width() - position[0] - 8
+
+        lines = self.wrap_text(text, font, max_width)
+
+        y = position[1]
+        rendered = []
+
+        for line in lines:
+            surf = self.render_text_outline(
+                font,
+                line,
+                fg,
+                outline,
+                outline_px
+            )
+            rect = surf.get_rect(topleft=(position[0], y))
+            rendered.append((surf, rect))
+            y += font.get_height()
+
+        self.screen_text = rendered
+
+        for surf, rect in rendered:
+            self.screen.blit(surf, rect)
+
+        pygame.display.flip()
+        pygame.time.set_timer(self.SCREEN_TEXT_EVENT, int(duration))
+
+    def render_text_outline(
+            self,
+            font: pygame.font.Font,
+            text: str,
+            fg_color: tuple[int, int, int],
+            outline_color: tuple[int, int, int] = (0, 0, 0),
+            outline_px: int = 1
+    ) -> pygame.Surface:
+        text_surf = font.render(text, True, fg_color)
+
+        w = text_surf.get_width() + outline_px * 2
+        h = text_surf.get_height() + outline_px * 2
+
+        surf = pygame.Surface((w, h), pygame.SRCALPHA)
+
+        # Draw outline
+        for dx in range(-outline_px, outline_px + 1):
+            for dy in range(-outline_px, outline_px + 1):
+                if dx == 0 and dy == 0:
+                    continue
+                surf.blit(
+                    font.render(text, True, outline_color),
+                    (dx + outline_px, dy + outline_px)
+                )
+
+        # Draw main text
+        surf.blit(text_surf, (outline_px, outline_px))
+        return surf
+
+
+    def wrap_text(self, text: str, font: pygame.font.Font, max_width: int) -> list[str]:
+        words = text.split(" ")
+        lines = []
+        current_line = ""
+
+        for word in words:
+            test_line = current_line + (" " if current_line else "") + word
+            width, _ = font.size(test_line)
+
+            if width <= max_width:
+                current_line = test_line
+            else:
+                if current_line:
+                    lines.append(current_line)
+                current_line = word
+
+        if current_line:
+            lines.append(current_line)
+
+        return lines
+    
+    def render_wrapped_outline_text(
+            self,
+            text: str,
+            font: pygame.font.Font,
+            max_width: int,
+            fg_color=(255, 255, 255),
+            outline_color=(0, 0, 0),
+            outline_px=1
+    ) -> list[pygame.Surface]:
+        lines = self.wrap_text(text, font, max_width)
+
+        surfaces = []
+        for line in lines:
+            surf = self.render_text_outline(
+                font,
+                line,
+                fg_color,
+                outline_color,
+                outline_px
+            )
+            surfaces.append(surf)
+
+        return surfaces
+    def toggle_screen_text(self):
+        screen_text_enabled = self.game_state.get_flag("g_screenTextEnabled")
+        if screen_text_enabled == True:
+            self.game_state.set_flag("g_screenTextEnabled", False)
+            if self.screen_text[0] is not None:
+                self.screen_text = (None, None)
+                pygame.time.set_timer(self.SCREEN_TEXT_EVENT, 0)  # Stop the timer
+        else:
+            self.game_state.set_flag("g_screenTextEnabled", True)
+
+    def toggle_music(self):        
+        music_muted = self.game_state.get_flag("g_musicMuted")
+        if music_muted == True: 
+            # Music is muted, so unmute and start playing
+            self.game_state.set_flag("g_musicMuted", False)
+            self.music.start_next_song_now()
+        else:
+            # Music is playing, so mute it
+            self.game_state.set_flag("g_musicMuted", True)
+            self.music.kill_music(soft_kill=False)
+
     def start_song(self, songId: int, loop: bool = False):
+        if self.game_state.get_flag("g_musicMuted") is True:
+            return
         self.music.start_song(songId, loop)
 
-    def play_talkie(self, filename, soundChannel=0, loop: bool = False):
-        filepath = "assets/audio/talkies/" + filename
+    def restart_game(self, start_room_id=None):
+        """
+        Fully restart the game:
+        - Clears room, actors, UI, audio, and game state
+        - Returns to the start room
+        """
+        if start_room_id is None:
+            start_room_id = getattr(self, "start_room_id", None)
+            if start_room_id is None:
+                raise ValueError("restart_game requires a start_room_id (or Engine.start_room_id set).")
+
+        # 1) Stop any timers (example: your caption timer)
+        if hasattr(self, "SCREEN_TEXT_EVENT"):
+            pygame.time.set_timer(self.SCREEN_TEXT_EVENT, 0)
+
+        # 2) Clear UI / captions
+        if hasattr(self, "screen_text"):
+            self.screen_text = (None, None)
+
+        # 3) Stop audio
+        if hasattr(self, "audio"):
+            music_muted = self.game_state.get_flag("g_musicMuted")
+            print(f'[core.py] restart_game() music_muted={music_muted}')
+
+            if music_muted == True: 
+                self.audio.stop_all_but(self.music.music_channel)
+            else:
+                self.audio.stop_all()
+    
+
+        # 4) Clear actor table safely
+        if hasattr(self, "actor_table"):
+            # copy values so we can modify the dict while iterating
+            for actor in list(self.actor_table.values()):
+                actor.destroy()
+            self.actor_table.clear()
+
+        # 5) Let the current room clean itself up
+        if self.current_room is not None:
+            # if you have room.exit logic, call it
+            if hasattr(self.current_room, "exit"):
+                self.current_room.exit()
+            if hasattr(self.current_room, "destroy"):
+                print('[core.py] restart_game() destroying current room')
+                self.current_room.destroy()
+
+            # clear sprite groups if the room has them
+            if hasattr(self.current_room, "actors"):
+                self.current_room.actors.empty()
+
+            if hasattr(self.current_room, "hotspots"):
+                self.current_room.hotspots.clear()
+
+            self.current_room = None
+
+        # 6) Reset game state
+        # If you use a GameState class, recreate it here.
+        # Otherwise just clear the dict.
+        if isinstance(self.game_state, dict):
+            print('[core.py] restart_game() clearing game_state dict')
+            self.game_state.clear()
+        else:
+            new_state = type(self.game_state)()
+            for k in ("g_screenTextEnabled", "g_musicMuted", "g_talkiesMuted", "g_soundsMuted"):
+                new_state.set_flag(k, self.game_state.get_flag(k))
+
+            self.game_state = new_state
+
+        # 7) Restart from the beginning
+        self.change_room(start_room_id)
+
+
+    @dataclass
+    class TalkieResult:
+        handle: AudioHandle
+        subtitle: str | None
+        
+    def play_talkie(self, filename: str, soundChannel: int = 0, loop: bool = False):
+        filepath = f"assets/audio/talkies/{filename}"
         sound = self.audio.load(filepath)
         return self.audio.play(sound, filename, soundChannel, loop)
-    
+
+    def say_line(self, key: str, *, color=(255, 165, 255), channel: int = 0, show_subtitles: bool = True):
+        # Defaults if no entry exists
+        filename = key
+        subtitle = None
+
+        talkie_info = self.talkie_table.get(key)
+        if talkie_info:
+            filename, subtitle = talkie_info  # (audio_filename, subtitle_text)
+
+        handle = self.play_talkie(filename, soundChannel=channel, loop=False)
+
+        if show_subtitles and subtitle:
+            self.show_text(subtitle, color=color)
+
+        return self.TalkieResult(handle, subtitle)
+
+
     def play_sound(self, filename, soundChannel=-1, loop: bool = False):
         filepath = "assets/audio/sfx/" + filename
         sound = self.audio.load(filepath)

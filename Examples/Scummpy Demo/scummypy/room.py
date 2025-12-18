@@ -27,7 +27,8 @@ class Room:
 
         # these can be overridden/assigned by room scripts
         # e.g. room.enter = lambda: enter(room, engine)
-        self.enter = lambda: self.fake_enter()
+        self.enter = lambda: None
+        self.handleEnteredRoom = lambda: None
         self.entered = False
         self.destroy = lambda: None
         self.initiated = False
@@ -191,7 +192,8 @@ class Room:
 
     def remove_actor(self, actor):
         if actor:
-            delattr(self, actor.__name__) 
+            if self.room_has(actor.__name__): 
+                delattr(self, actor.__name__) 
 
             del self.engine.actor_table[actor.actor_id] 
 

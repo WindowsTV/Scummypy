@@ -1,15 +1,23 @@
 class GameState:
-    def __init__(self):
-        self.flags = {
-            "g_DEBUG": False,
-            "g_interfaceVisible": False,
-            "g_roomVisible": True,
-            "g_cursorVisible": True,
-            "g_lastRoom": -1,
-            "g_lastCursor": None,
-            "g_currentCursor": None,
-            "g_itemOnCursor": None,
-        }
+    def __init__(self, flags=None):
+        if flags is None:
+            self.flags = {
+                "g_DEBUG": False,
+                "g_interfaceVisible": False,
+                "g_roomVisible": True,
+                "g_lastRoom": -1,
+                "g_currentRoom": -1,
+                "g_cursorVisible": True,
+                "g_lastCursor": None,
+                "g_currentCursor": None,
+                "g_itemOnCursor": None,
+                "g_screenTextEnabled": True,
+                "g_musicMuted": False,
+                "g_talkiesMuted": False,
+                "g_soundsMuted": False,
+            }
+        else:
+            self.flags = flags.copy()  # <- key line
         self.inventory = []
 
     def set_flag(self, name, value=True):

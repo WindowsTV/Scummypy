@@ -19,6 +19,10 @@ def init(engine) -> Room:
 
     room = Room(engine, ROOM_NAME, bg)
 
+    #create_hotspot(left, top, width, height, onClick):
+    exitToGoatRoom = room.create_hotspot(left=142, top=33, width=131, height=103)
+    room.setup_clickpoint(exitToGoatRoom, onExitToSGoatRoom, Cursors.NWDeep)
+
     # attach script hooks as plain Python functions
     room.enter = lambda: enter(room, engine)
     room.destroy = lambda: destroy(room, engine)
@@ -29,13 +33,6 @@ def init(engine) -> Room:
 def enter(room, engine) -> None:
     print("Entered", ROOM_NAME)
     engine.game_state.set_flag("g_interfaceVisible", True) 
-
-    #engine.start_song(1, loop=True)
-
-    #create_hotspot(left, top, width, height, onClick):
-    exitToGoatRoom = room.create_hotspot(left=142, top=33, width=131, height=103)
-    room.setup_clickpoint(exitToGoatRoom, onExitToSGoatRoom, Cursors.NWDeep)
-
 
 def onExitToSGoatRoom(room, engine) -> None:
     print("Bye-Bye!")

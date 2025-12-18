@@ -1,4 +1,5 @@
 import pygame
+import random
 
 import scummypy.resources as Resources
 from scummypy.room import Room
@@ -36,18 +37,25 @@ def enter(room, engine) -> None:
     gasGaugeHotspot = room.create_hotspot(5, 394, 42, 50)
     room.setup_clickpoint(gasGaugeHotspot, onGasGaugeClick)
 
+    menuHotspot = room.create_hotspot(left=5, top=442, width=47, height=37)
+    room.setup_clickpoint(menuHotspot, onMenuHotspotClick)
+
     hornHotspot = room.create_hotspot(102, 408, 42, 50)
     room.hornClickpoint = room.setup_clickpoint(hornHotspot, onHornClick)
 
-    speedHotspot = room.create_hotspot(left=198, top=376, width=84, height=62)
+    speedHotspot = room.create_hotspot(left=198, top=376, width=82, height=62)
     room.speedClickpoint = room.setup_clickpoint(speedHotspot, onSpeedClick)
 
     radioHotspot = room.create_hotspot(left=200, top=442, width=93, height=32)
     room.radioClickpoint = room.setup_clickpoint(radioHotspot, onRadioClick)
 
 def onGasGaugeClick(room, engine):
-    _current_handle = engine.play_talkie("putt_0001.flac")
-    print("I think I need some gas..")
+    _line_said = engine.say_line("putt_0001")
+    print(_line_said.subtitle)
+
+def onMenuHotspotClick(room, engine):
+    exit_to = 4
+    engine.change_room(exit_to)
 
 def onHornClick(room, engine):
     print("Heather go beep")
@@ -65,7 +73,8 @@ def onHornClick(room, engine):
         # Actor(actor_id=None, costume=None, name=None, pos=(0, 0), room=None)
         hornActor = Actor(room.get_next_actor_id(), inv_costume)
         hornActor.costume.sprite_sheet.set_colorkey((203, 123, 199))
-        hornActor.costume.play("inv-horn-beep")
+        animation = ["inv-horn-beep", "inv-horn-whistle", "inv-horn-aooga", "inv-horn-kooky"]
+        hornActor.costume.play(random.choice(animation))
         hornActor.add_event(
             ActorEvents.ANIMATION_END,
             handleEvent,
