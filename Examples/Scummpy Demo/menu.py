@@ -32,11 +32,8 @@ def enter(room, engine) -> None:
     print("Entered", ROOM_NAME, Resources.ROOM_PATH)
     engine.game_state.set_flag("g_interfaceVisible", False) 
 
-    # print(f'{ROOM_NAME} says at enter() g_lastRoom is {engine.game_state.get_flag("g_lastRoom")}')
-    # print(f'{ROOM_NAME} says at enter() g_previousRooms is {engine.game_state.get_flag("g_previousRooms")}')
-
     #create_hotspot(left, top, width, height, onClick):
-    exit_to = engine.game_state.get_flag("g_currentRoom")
+    exit_to = engine.game_state.get_flag("g_lastRoom")
     onExitHotspotClicked = lambda *_ : exit(room, exit_to)
     exitHotspot = room.create_hotspot(left=569, top=13, width=58, height=63)
     room.setup_clickpoint(exitHotspot, onExitHotspotClicked, Cursors.NEDeep)
@@ -63,7 +60,13 @@ def menuItemToggle(room, engine, toggle_name:str = "") -> None:
 def menuItemSingle(room, engine, action_name:str = "") -> None:
     print(f"Single menu item: {action_name}")
     if action_name == "restartGame":
-        engine.restart_game()
+        engine.prompt(
+            prompt_type="yesno",
+            title="Restart Game",
+            message="Are you sure you want to restart the game?",
+            pcallback=lambda _result: engine.restart_game(),
+        )
+        #engine.restart_game()
 
 def exit(room, exit_to:int=0, exit_actor=None, exit_ainm_frame="") -> None:
     engine = room.engine
@@ -73,23 +76,18 @@ def exit(room, exit_to:int=0, exit_actor=None, exit_ainm_frame="") -> None:
     if exit_to <= 0 or exit_to is None:
         return print("[room] Can't go there..")
     
-    # print(f'{ROOM_NAME} says at exit() g_lastRoom is {engine.game_state.get_flag("g_lastRoom")}')
     engine.game_state.set_flag("g_interfaceVisible", True) 
     engine.change_room(exit_to, skip_enter_func=True)
-
-def onExitAnimationDone(exit_actor, event, room, exit_to:int=0) -> None:
-    engine = room.engine
-    if exit_to is 0:
-        return print("[room] Can't go there..")
-    
-    engine.change_room(exit_to)
 
 
 def destroy(room, engine) -> None:
     print(f'Destroying {ROOM_NAME}')
 
     # Override the g_lastRoom to set the stat animation correctly
-    prev_rooms = engine.game_state.get_flag("g_previousRooms") or []
-    last_room_for_stat_animation = prev_rooms[-1] if prev_rooms else None
+    if engine.game_state.get_flag("g_restoreLastRoomFrom") is not None:
+        last_room_for_stat_animation = engine.game_state.get_flag("g_restoreLastRoomFrom")
+    else:
+        prev_rooms = engine.game_state.get_flag("g_previousRooms") or []
+        last_room_for_stat_animation = prev_rooms[-1] if prev_rooms else None
     engine.game_state.set_flag("g_lastRoom", last_room_for_stat_animation)
     

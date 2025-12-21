@@ -16,13 +16,13 @@ class Actor(pygame.sprite.Sprite):
         if costume is None:
             raise ValueError("[actor.py] Actor requires a Costume")
         
+        self.room = room
         self.actor_id = actor_id
         self.costume = costume
         self.costume.actor = self
         if name is not None:
             self.__name__ = name
         self.pos = pygame.math.Vector2(pos)
-        self.room = room
 
         self.image = costume.image
         self.rect = self.image.get_rect()

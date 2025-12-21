@@ -23,7 +23,7 @@ class GameState:
     def set_flag(self, name, value=True):
         self.flags[name] = value
 
-    def get_flag(self, name, default=False):
+    def get_flag(self, name, default=None):
         return self.flags.get(name, default)
     
     def add_item_to_inventory(self, item_id, value=True):

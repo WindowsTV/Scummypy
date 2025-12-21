@@ -1,10 +1,10 @@
-from dataclasses import dataclass
+import threading
+import time
+from unittest import result
 import pygame
-import tkinter as tk
-from tkinter import simpledialog
-from tkinter import commondialog
-from tkinter import messagebox
-from .system import InputDialog
+import traceback
+
+from dataclasses import dataclass
 
 
 import scummypy.resources as Resources
@@ -12,6 +12,7 @@ from .cursors import Cursors
 from .actor import ActorEvents
 from .audio import AudioHandle, AudioManager, AudioEventScheduler
 from .music import MusicSystem, Song
+from .system import ask_yes_no, ask_ok_cancel
 
 class Engine:
     def __init__(self, screen_size=(640, 480), fps=60, title="Scummpy"):
@@ -19,15 +20,12 @@ class Engine:
         self.screen = pygame.display.set_mode(screen_size)
         pygame.display.set_caption(title)
 
-        # ---- Tkinter hidden root ----
-        self.tk_root = tk.Tk()
-        self.tk_root.withdraw()   # Hide the main Tkinter window
-        self.tk_root.attributes("-topmost", True)  # Dialogs appear on top
-
         self.DEBUG: bool = False
         self.HOTSPOT_DRAWER_POINTS = [(None, None), (0, 0)]
         # pygame.key.set_repeat(80)
 
+        self._main_thread_id = threading.get_ident()
+        self._skip_dt_frames = 0
         self.clock = pygame.time.Clock()
         self.fps: int = fps
         self.title: str = title
@@ -37,6 +35,7 @@ class Engine:
 
         # [audio.py] SOUND_END = pygame.USEREVENT + 1
         self.SCREEN_TEXT_EVENT: int = pygame.USEREVENT + 3
+        self.ENGINE_RESTART_EVENT = pygame.USEREVENT + 50
         # [actor.py] ANIMATION_END = pygame.USEREVENT + 100
 
         self.interface = None
@@ -54,14 +53,15 @@ class Engine:
 
     def refocus_pygame(self):
         # Bring the Pygame window to the front
-        pygame.display.set_mode(self.screen.get_size())  # refreshes window handle
+        #pygame.display.set_mode(self.screen.get_size())  # refreshes window handle
 
         # Force SDL window to focus
-        pygame.event.post(pygame.event.Event(pygame.ACTIVEEVENT, gain=1, state=6))
+        pygame.event.post(pygame.event.Event(pygame.ACTIVEEVENT, gain=1, state=2))
 
         # On some window managers, we need an explicit focus command:
         try:
             if self.DEBUG and self.current_room:
+                pass
                 pygame.display.set_caption(f"{self.title} - room: {self.current_room.ROOM_NAME}")
             else:          
                 pygame.display.set_caption(self.title)  # causes focus update
@@ -165,6 +165,7 @@ class Engine:
         self._handle_mouse_motion()
 
     def change_room(self, room_id: int, skip_enter_func: bool = False):
+
         if room_id is None or not isinstance(room_id, int):
             raise TypeError(f"room_id must be int, got {type(room_id).__name__}")
 
@@ -210,6 +211,7 @@ class Engine:
         factory = self.room_registry[room_id]
         Resources.ROOM_PATH = factory[1]
         self.current_room = factory[0](self)
+        self.game_state.set_flag("g_currentRoom", room_id)
 
         if hasattr(self.current_room, "enter"):
             self.current_room.enter()
@@ -246,10 +248,6 @@ class Engine:
         if self.DEBUG:
             pygame.display.set_caption(f"{self.title} - room: {self.current_room.ROOM_NAME}")
 
-        # current room stays a single int
-        self.game_state.set_flag("g_currentRoom", room_id)
-
-
     def main_loop(self, start_room_id: int):
         if start_room_id:
             self.start_room_id = start_room_id
@@ -260,7 +258,14 @@ class Engine:
         self.running = True
 
         while self.running:
-            dt = self.clock.tick(self.fps) / 1000.0  # seconds
+            dt = self.clock.tick(self.fps) / 1000.0
+            dt = min(dt, 1/30) # clamp to ~33ms (or 1/15 if you prefer)
+
+            # If we just came back from a modal, ignore dt for a couple frames
+            if self._skip_dt_frames > 0:
+                dt = 0.0
+                self._skip_dt_frames -= 1
+
             for scheduler in self.audio_schedulers:
                 scheduler.update()
             self.audio_schedulers = [
@@ -269,11 +274,35 @@ class Engine:
             ] # clean out finished ones
 
             for event in pygame.event.get():
+                if event.type in (
+                    getattr(pygame, "WINDOWFOCUSGAINED", -1),
+                    getattr(pygame, "WINDOWFOCUSLOST", -1),
+                    getattr(pygame, "WINDOWENTER", -1),
+                    getattr(pygame, "WINDOWLEAVE", -1),
+                ): 
+                    pass # print("[WIN]", pygame.event.event_name(event.type), event)
+
+
                 if event.type == pygame.QUIT:
                     self.running = False
+                elif event.type == self.ENGINE_RESTART_EVENT:
+                    print("[core.py] ENGINE_RESTART_EVENT received")
+
+                    self.change_room(event.room_id)
+
+                    # Reset timing so room enter animation doesn't fast-forward
+                    self.clock.tick()
+                    self._skip_dt_frames = 2
+
+                    # Flush anything queued from the previous room/menu/dialog
+                    pygame.event.clear()
+                    break
+
                 elif event.type == self.audio.SOUND_END:
+                    print("[core.py] SOUND_END event received")
                     self.audio.on_audio_end()
                 elif event.type == self.SCREEN_TEXT_EVENT:
+                    print("[core.py] SCREEN_TEXT_EVENT event received")
                     self.screen_text = (None, None)
                     pygame.time.set_timer(self.SCREEN_TEXT_EVENT, 0)  # Stop the timer
                 elif event.type == pygame.MOUSEMOTION:
@@ -285,7 +314,7 @@ class Engine:
                         if event.type == pygame.KEYUP:
                             self._handle_keyup(event)
 
-                    if not self.mouse_input_blocked:
+                    if not self.mouse_input_blocked:                        
                         if self.current_room:
                             self.current_room.handle_event(event)
                         if self.interface:
@@ -373,42 +402,62 @@ class Engine:
         if event.key == 1073742048: #CTRL Key
             self.HOTSPOT_DRAWER_POINTS[0] = (None, None)
     
-    def show_prompt(self, promptType="input", title="Info", message="Unknown message"):
-        # Block engine input while dialog is up
-        self.mouse_input_blocked = True
-        self.key_input_blocked = True
-
-        pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_ARROW)
-
-        msg_response = None
+    def _debug_focus_snapshot(self, tag: str):
         try:
-            if promptType in ("okay", "ok"):
-                msg_response = messagebox.showinfo(title, message, parent=self.tk_root)
+            focused = pygame.key.get_focused()
+        except Exception:
+            focused = None
 
-            elif promptType == "okCancel":
-                msg_response = messagebox.askokcancel(title, message, parent=self.tk_root)
+        try:
+            mouse_focused = pygame.mouse.get_focused()
+        except Exception:
+            mouse_focused = None
 
-            elif promptType == "input":
-                dialog = InputDialog(self.tk_root, title, message)
-                msg_response = dialog.result
+        pressed = None
+        try:
+            pressed = pygame.mouse.get_pressed(3)
+        except Exception:
+            pass
 
-            elif promptType == "yesNo":
-                msg_response = messagebox.askyesno(title, message, parent=self.tk_root)
+        print(
+            f"[FOCUS] {tag} | key_focused={focused} mouse_focused={mouse_focused} "
+            f"blocked(mouse={self.mouse_input_blocked}, key={self.key_input_blocked}) "
+            f"pressed={pressed}"
+        )
 
-            else:
-                # Fallback to simple info
-                msg_response = messagebox.showinfo(title, message, parent=self.tk_root)
+    def _debug_drain_events(self, n: int = 30, tag: str = ""):
+        events = pygame.event.get()
+        print(f"[EVENTS] drain tag={tag} count={len(events)}")
+        for i, e in enumerate(events[:n]):
+            name = pygame.event.event_name(e.type)
+            extras = []
+            if hasattr(e, "pos"):
+                extras.append(f"pos={e.pos}")
+            if hasattr(e, "button"):
+                extras.append(f"button={e.button}")
+            if hasattr(e, "key"):
+                extras.append(f"key={e.key}")
+            if hasattr(e, "gain"):
+                extras.append(f"gain={getattr(e, 'gain', None)} state={getattr(e, 'state', None)}")
+            print(f"  {i:02d}: {name} ({e.type}) {' '.join(extras)}")
 
-        finally:
-            # Flush any clicks/keys that happened while dialog was up
-            pygame.event.clear()
-
-            # Restore input & cursor
-            self.show_cursor(inputBlocked=False)
-            self.key_input_blocked = False
-            self.refocus_pygame()
-
-        return msg_response
+    def prompt(
+        self,
+        *,
+        prompt_type: str = "okcancel",
+        title: str | None = None,
+        message: str = "Are you sure?",
+        pcallback=None,
+        ncallback=None,
+    ) -> bool:
+        if title is None:
+            title = self.title
+        if prompt_type == "yesno":
+            return ask_yes_no(self, title=title, message=message, pcallback=pcallback, ncallback=ncallback)
+        elif prompt_type == "okcancel":
+            return ask_ok_cancel(self, title=title, message=message, pcallback=pcallback, ncallback=ncallback)
+        else:
+            return False
 
 
     def hide_cursor(self, inputBlocked=False):
@@ -674,7 +723,9 @@ class Engine:
             self.game_state = new_state
 
         # 7) Restart from the beginning
-        self.change_room(start_room_id)
+        pygame.event.post(pygame.event.Event(self.ENGINE_RESTART_EVENT, {"room_id": start_room_id}))
+        #threading.Timer(0.1, self.change_room, args=(start_room_id,)).start()
+        #self.change_room(start_room_id)
 
 
     @dataclass

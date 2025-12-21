@@ -54,6 +54,7 @@ def onGasGaugeClick(room, engine):
     print(_line_said.subtitle)
 
 def onMenuHotspotClick(room, engine):
+    engine.game_state.set_flag("g_restoreLastRoomFrom", engine.game_state.get_flag("g_lastRoom"))
     exit_to = 4
     engine.change_room(exit_to)
 

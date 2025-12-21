@@ -23,7 +23,6 @@ def init(engine) -> Room:
 
     # attach script hooks as plain Python functions
     room.enter = lambda: enter(room, engine)
-    room.handleEnteredRoom = lambda: handleEnteredRoom(room=room, engine=engine)
     room.destroy = lambda: destroy(room, engine)
 
     engine.game_state.set_flag("g_interfaceVisible", True) 
@@ -67,17 +66,13 @@ def enter(room, engine) -> None:
     actor.costume.play()
     actor.add_event(
         ActorEvents.ANIMATION_END,
-        handleEnteredRoom,
+        handlePuttAnimationEnd,
         room, # Arg 3
-        engine, # Arg 4
     )
     room.add_actor(actor, "putt")
 
-def handleEnteredRoom(actor=None, event=[], room=None, engine=None):
-    if room is not None:
-        handlePuttAnimationEnd(actor, event, room)
-
 def handlePuttAnimationEnd(actor, event, room):
+    pass
     print("handlePuttAnimationEnd", actor, event, room)
     if actor is not None:
         room.remove_actor(actor) 
@@ -155,6 +150,7 @@ def onRockClick(room, engine):
 
 def onStumpClick(room, engine):
     print("[street.py]", engine.actor_table)
+    engine.show_text("This stump looks like it was cut a long time ago. When do you think it was cut?")
 
 def exit(room, exit_to:int=0, exit_actor=None, exit_ainm_frame="") -> None:
     engine = room.engine

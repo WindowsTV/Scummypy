@@ -37,7 +37,10 @@ class Room:
         return None
 
     def handle_event(self, event):
+        # print(f"[ROOM] handle_event {pygame.event.event_name(event.type)} pos={getattr(event,'pos',None)}")
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            self._handle_down(event.pos)
+        if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
             self._handle_click(event.pos)
         elif event.type == ActorEvents.ANIMATION_END:
             if event.animation_type is "actor":
@@ -45,7 +48,7 @@ class Room:
 
 
     def get_hover_cursor(self, pos):
-        for rect, callback, hoverCursor, disabled in self.hotspots:
+        for rect, callback, hoverCursor, disabled, _ in self.hotspots:
             if rect.collidepoint(pos):
                 if disabled is True:
                     return Cursors.NORMAL
@@ -53,11 +56,30 @@ class Room:
                     return hoverCursor or pygame.SYSTEM_CURSOR_CROSSHAIR
         return None
 
+    def _handle_down(self, pos):
+        """Mouse button down at pos. Used for press/hold/drag begin behaviors."""
+        self._pressed_hotspot = None  # (rect, callback, downCallback) or whatever you want
+
+        for rect, callback, _, disabled, downCallback in self.hotspots:
+            if disabled:
+                continue
+            if not rect.collidepoint(pos):
+                continue
+
+            # Remember what was pressed so UP can commit / dragging can continue
+            self._pressed_hotspot = (rect, callback, downCallback)
+
+            if callable(downCallback):
+                downCallback(self, self.engine)  # or downCallback(self.engine, pos)
+
+            break
+
     def _handle_click(self, pos):
-        for rect, callback, _, disabled in self.hotspots:
+        for rect, callback, _, disabled, _ in self.hotspots:
             if rect.collidepoint(pos):
                 if disabled is not True:
-                    callback(self, self.engine)
+                    if callable(callback):
+                        callback(self, self.engine)
                 break
 
     def update(self, dt: float):
@@ -73,7 +95,7 @@ class Room:
 
         # DEBUG: draw hotspot rectangles
         if self.engine.DEBUG:
-            for rect, _, _, disabled in self.hotspots:
+            for rect, _, _, disabled, _ in self.hotspots:
                 if type(rect) is pygame.rect.Rect:
                     pygame.draw.rect(screen, "red", rect, width=2)
 
@@ -99,11 +121,11 @@ class Room:
         #hotspot = self.hotspots.append((rect, onClick))
         return rect
 
-    def setup_clickpoint(self, clickable, onClick, hoverCursor=None):
+    def setup_clickpoint(self, clickable, onClick=None, hoverCursor=None, onDown=None):
         if hoverCursor is None:
             hoverCursor = Cursors.HIGHLIGHT
 
-        clickpoint = [clickable, onClick, hoverCursor, False]
+        clickpoint = [clickable, onClick, hoverCursor, False, onDown]
         self.hotspots.append(clickpoint)
 
         return clickpoint
@@ -117,7 +139,7 @@ class Room:
         rect_to_check = clickable[0]
 
         for hotspot in self.hotspots:   # hotspot is a list: [rect, callback, cursor, disabled]
-            rect, callback, hoverCursor, disabled = hotspot
+            rect, callback, hoverCursor, disabled, downCallback = hotspot
             
             if rect_to_check is rect:
                 hotspot[3] = True
@@ -134,7 +156,7 @@ class Room:
         rect_to_check = clickable[0]
 
         for hotspot in self.hotspots:
-            rect, callback, hoverCursor, disabled = hotspot
+            rect, callback, hoverCursor, disabled, downCallback = hotspot
             if rect_to_check is rect:       # same Rect object
                 hotspot[3] = False          # disabled -> False (enabled)
                 break
