@@ -2,6 +2,7 @@ import threading
 import pygame
 import time
 
+from typing import Iterable
 import scummypy.resources as Resources
 from scummypy.room import Room
 from scummypy.sprite import Sprite
@@ -55,12 +56,13 @@ def init(engine) -> Room:
 def enter(room, engine) -> None:
     print(f'[{ROOM_NAME}.py] Entered!')
 
+    enter_costume = Costume( Resources.load_room_costume("PUTT/int-left-enter") )
     room.entered_from = engine.game_state.get_flag("g_lastRoom")
     if room.entered_from == 2:  # from goat room
-        print(f'[street.py] you came from the Goat!')
+        enter_costume = Costume( Resources.load_room_costume("PUTT/int-right-enter") )
 
     engine.current_skipable = lambda eng: handlePuttAnimationEnd(room.putt, None, room)
-    costume = Costume( Resources.load_room_costume("PUTT/int-left-enter") )
+    costume = enter_costume
     # Actor(actor_id=None, costume=None, name=None, pos=(0, 0), room=None)
     actor = Actor(room.get_next_actor_id(), costume)
     actor.costume.play()
@@ -72,24 +74,29 @@ def enter(room, engine) -> None:
     room.add_actor(actor, "putt")
 
 def handlePuttAnimationEnd(actor, event, room):
-    pass
-    print("handlePuttAnimationEnd", actor, event, room)
-    if actor is not None:
-        room.remove_actor(actor) 
+    room.engine.current_skipable = None
 
-    costume = Costume( Resources.load_room_costume("PUTT/pai-stat") )
-    # Actor(actor_id=None, costume=None, name=None, pos=(0, 0), room=None)
-    actor = Actor(room.get_next_actor_id(), costume)
-    # actor.costume.play()
-    room.add_actor(actor, "putt")
-    actor.costume.stop_layer("head")
-    actor.costume.stop_layer("lids")
-    #actor.look_at("player")
-    actor.costume.stop_layer("eyes-normal")
+    # print("handlePuttAnimationEnd", actor, event, room)
+    #if actor is not None:
+        #room.remove_actor(actor) 
 
-    onBlinkCompletedFunc = lambda: onBlinkCompleted(room, room.engine)
-    threading.Timer(1, actor.blink, args=("player", onBlinkCompletedFunc)).start()
+    stat_costume = Costume( Resources.load_room_costume("PUTT/int-stat-left") )
+    if room.entered_from == 2:  # from goat room
+        stat_costume = Costume( Resources.load_room_costume("PUTT/int-stat-right") )
+
+    costume = stat_costume
+    actor.change_costume(costume)
+    room.setup_clickpoint(actor, handleMainPuttClick)
+    actor.costume.stop_layers("head", "lids", "eyes-normal", frame=None)
+
+    #onBlinkCompletedFunc = lambda: onBlinkCompleted(room, room.engine)
+    #threading.Timer(1, actor.blink, args=("player", onBlinkCompletedFunc)).start()
     #actor.blink("player", lambda: onBlinkCompleted(room, room.engine))  
+
+def handleMainPuttClick(room, engine): 
+    print("Putt clicked!")
+    engine.say_line(["putt_0002", "putt_0003"], look_at="player")
+    # print(_line_said.subtitle)
 
 def onBlinkCompleted(room, engine):
     room.putt.costume.play_layer("head", 0)
@@ -99,11 +106,13 @@ def onExitToTrainClick(room, engine):
     print("Bye-Bye!")
     engine.hide_cursor(inputBlocked=True)
 
-    #engine.change_room(2)
-    room.remove_actor(room.putt)
+    exit_costume = Costume( Resources.load_room_costume("PUTT/int-left2right-exit") )
+    if room.entered_from == 2:  # from goat room
+        exit_costume = Costume( Resources.load_room_costume("PUTT/int-right2right-exit") )
 
-    costume = Costume( Resources.load_room_costume("PUTT/int-left2right-exit") )
-    actor = Actor(room.get_next_actor_id(), costume)
+    actor = room.putt
+    costume = exit_costume
+    actor.change_costume(costume)
     actor.costume.play()
     actor.add_event(
         ActorEvents.ANIMATION_END,
@@ -111,7 +120,6 @@ def onExitToTrainClick(room, engine):
         room,
         2,
     )
-    room.add_actor(actor, "putt")
     engine.current_skipable = lambda eng: onExitAnimationDone(actor, None, room, 2)
 
 def onExitToFakeRoom(room, engine):
@@ -150,7 +158,38 @@ def onRockClick(room, engine):
 
 def onStumpClick(room, engine):
     print("[street.py]", engine.actor_table)
-    engine.show_text("This stump looks like it was cut a long time ago. When do you think it was cut?")
+    #engine.show_text("This stump looks like it was cut a long time ago. When do you think it was cut?", force_show=True)
+
+    if not engine.game_state.get_flag("street_cu_on"):
+        room.engine.current_skipable = lambda eng_self: hideCloseup(room, engine)
+        engine.game_state.set_flag("street_cu_on", True) 
+        bg = Resources.load_room_image(ROOM_PATH, "cu_left_bg.png").convert()
+        engine.close_up(bg, True)
+        costume = Costume( Resources.load_room_costume("PUTT/int-cu-stat") )
+        room.putt.change_costume(costume)
+        room.putt.costume.stop_layers("head", "lids", "eyes-normal", frame=None)
+        room.close_up_timer = threading.Timer(0.4, handleCloseupStarted, args=(room, engine))
+        room.close_up_timer.start()
+
+    else:
+        hideCloseup(room, engine)
+
+def handleCloseupStarted(room, engine):
+    print("handleCloseupStarted called")
+    if engine.in_close_up == True:
+        engine.say_line(["putt_0004", "putt_0006", "putt_0005"], on_done=lambda: handleCloseupEnded(room, engine))
+
+def handleCloseupEnded(room, engine):
+    room.close_up_timer = threading.Timer(1, hideCloseup, args=(room, engine))
+    room.close_up_timer.start()
+
+def hideCloseup(room, engine):
+    room.close_up_timer.cancel()
+    room.engine.current_skipable = None
+    engine.game_state.set_flag("street_cu_on", False) 
+    handlePuttAnimationEnd(room.putt, None, room)
+    engine.hide_close_up()
+
 
 def exit(room, exit_to:int=0, exit_actor=None, exit_ainm_frame="") -> None:
     engine = room.engine
@@ -162,6 +201,7 @@ def exit(room, exit_to:int=0, exit_actor=None, exit_ainm_frame="") -> None:
     engine.change_room(exit_to)
 
 def onExitAnimationDone(exit_actor, event, room, exit_to:int=0) -> None:
+    room.engine.current_skipable = None
     engine = room.engine
     if exit_to is 0:
         return print("[room] Can't go there..")

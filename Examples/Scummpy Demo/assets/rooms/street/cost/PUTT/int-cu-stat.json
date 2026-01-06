@@ -1,0 +1,49 @@
+{
+	"base_url":"PUTT/",
+	"framerate":10,
+	"layers":{
+		"body":{
+			"isHidden":false,
+			"canColorize":true,
+			"images":["int-cu-stat.png"],
+			"frames":[
+				[1725, 0, 279, 207, 0, 0, -273]
+			],
+			"animations":{}
+		},
+		"head":{
+			"isHidden":false,
+			"canColorize":true,
+			"images":["int-cu-stat.png"],
+			"frames":[
+				[348, 474, 348, 470, 0, 0, -10],
+				[0, 0, 343, 474, 0, 0, -6],
+				[1377, 0, 348, 470, 0, 0, -10],
+				[686, 0, 343, 474, 0, 0, -6],
+				[1047, 474, 351, 465, 0, 0, -15],
+				[1029, 0, 348, 470, 0, 0, -10],
+				[351, 944, 351, 465, 0, 0, -15],
+				[0, 944, 351, 465, 0, 0, -15],
+				[1398, 474, 351, 465, 0, 0, -15],
+				[343, 0, 343, 474, 0, 0, -6],
+				[0, 474, 348, 470, 0, 0, -10],
+				[696, 474, 351, 465, 0, 0, -15]
+			],
+			"animations":{
+				"A": {"frames": [1], "next": "A", "speed": 1},
+				"Sys-11": {"frames": [2], "next": "Sys-11", "speed": 1},
+				"C_S": {"frames": [0], "next": "C_S", "speed": 1},
+				"L": {"frames": [3], "next": "L", "speed": 1},
+				"O": {"frames": [9], "next": "O", "speed": 1},
+				"E": {"frames": [5], "next": "E", "speed": 1},
+				"W_Q": {"frames": [8], "next": "W_Q", "speed": 1},
+				"static": {"frames": [0], "next": "static", "speed": 1},
+				"M_B_P": {"frames": [6], "next": "M_B_P", "speed": 1},
+				"Sys-13": {"frames": [11], "next": "Sys-13", "speed": 1},
+				"F_V": {"frames": [4], "next": "F_V", "speed": 1},
+				"U": {"frames": [7], "next": "U", "speed": 1},
+				"Sys-12": {"frames": [10], "next": "Sys-12", "speed": 1}
+			}
+		}
+	}
+}

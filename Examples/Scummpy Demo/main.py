@@ -56,6 +56,26 @@ TALKIES: dict[str, tuple] = {
                     "putt_0001.flac",
                     "That's my gas gauge.",
                  ),
+    "putt_0002": (
+                    "putt_0002.flac",
+                    "It says Baldini's Grocery Store.",
+                 ),
+    "putt_0003": (
+                    "putt_0003.flac",
+                    "I'm so excited!",
+                 ),
+    "putt_0004": (
+                    "putt_0004.flac",
+                    "Wow!",
+                 ),
+    "putt_0005": (
+                    "putt_0005.flac",
+                    "I can't wait to get to the zoo.",
+                 ),
+    "putt_0006": (
+                    "putt_0006.flac",
+                    "Pep! This is going to be a mighty fine day!",
+                 ),
 }      
 
 def main():

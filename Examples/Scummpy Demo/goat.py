@@ -44,6 +44,8 @@ def enter(room, engine) -> None:
     room.entered_from = engine.game_state.get_flag("g_lastRoom")
     if room.entered_from == 1:
         print(f'[street.py] you came from the Street!')
+    elif room.entered_from == 3:
+        print(f'[street.py] you came from the Flower room!')
 
     #engine.start_song(1, loop=True)
 

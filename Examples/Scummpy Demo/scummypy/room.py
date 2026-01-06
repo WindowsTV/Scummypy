@@ -17,6 +17,7 @@ class Room:
         self.engine = engine
         self.ROOM_NAME = room_name
         self.visible = True
+        self.restore_background = background_surface
         self.background = background_surface
         # use passed-in rect or default to (0, 0)
         self.background_rect = background_rect or self.background.get_rect(topleft=(0, 0))
@@ -24,11 +25,12 @@ class Room:
         self.actors = pygame.sprite.LayeredUpdates()
         self.sprites = pygame.sprite.LayeredUpdates()
         self.hotspots = []  # list of (pygame.Rect, callback)
+        self._hidden_actors = []
+        self._hidden_sprites = []
 
         # these can be overridden/assigned by room scripts
         # e.g. room.enter = lambda: enter(room, engine)
         self.enter = lambda: None
-        self.handleEnteredRoom = lambda: None
         self.entered = False
         self.destroy = lambda: None
         self.initiated = False
@@ -131,7 +133,7 @@ class Room:
         return clickpoint
         #room.hotspots.append((mailbox_rect, on_click_mailbox))
 
-    def disable_clickpoint(self, clickable=None):
+    def disable_clickpoint(self, clickable=None, do_mouse_check=True):
         if clickable is None:
             print("[room.py] No clickable to be disabled..")
             return
@@ -145,6 +147,18 @@ class Room:
                 hotspot[3] = True
                 break
         # Check if is over the (any) hotspot
+        if do_mouse_check == True:
+            self.engine._handle_mouse_motion()
+
+    def disable_all_clickpoints(self):
+        """Disable ALL clickpoints in this room."""
+        if not self.hotspots:
+            return
+
+        for hotspot in self.hotspots:
+            self.disable_clickpoint(hotspot, do_mouse_check=False)
+        
+        # Re-evaluate cursor hover after disabling all
         self.engine._handle_mouse_motion()
         
     def enable_clickpoint(self, clickable=None):
@@ -235,4 +249,39 @@ class Room:
             if actor is not None:
                 self.remove_actor(actor)
 
+    def hide_current_items(self):
+        """
+        Hide all currently present actors and sprites.
+        Newly added ones after this call will remain visible.
+        """
+        # Snapshot actors
+        self._hidden_actors = list(self.actors)
+        for actor in self._hidden_actors:
+            self.actors.remove(actor)
 
+        # Snapshot sprites
+        self._hidden_sprites = list(self.sprites)
+        for sprite in self._hidden_sprites:
+            self.sprites.remove(sprite)
+
+    def hide_current_sprites(self):
+        """
+        Hide all currently present sprites.
+        Newly added ones after this call will remain visible.
+        """
+
+        # Snapshot sprites
+        self._hidden_sprites = list(self.sprites)
+        for sprite in self._hidden_sprites:
+            self.sprites.remove(sprite)
+
+    def show_hidden_items(self):
+        """Restore previously hidden actors and sprites."""
+        for actor in self._hidden_actors:
+            self.actors.add(actor)
+
+        for sprite in self._hidden_sprites:
+            self.sprites.add(sprite)
+
+        self._hidden_actors.clear()
+        self._hidden_sprites.clear()

@@ -37,15 +37,22 @@ class Engine:
         self.SCREEN_TEXT_EVENT: int = pygame.USEREVENT + 3
         self.ENGINE_RESTART_EVENT = pygame.USEREVENT + 50
         # [actor.py] ANIMATION_END = pygame.USEREVENT + 100
+        # [actor.py] ACTOR_UPDATE = pygame.USEREVENT + 101
 
         self.interface = None
         self.last_room = None
         self.current_room = None
         self.current_skipable = callable
+        self.in_close_up = False
         self.room_registry = {}       # { "room_id": init(engine) }
         self.actor_table = {}
         self.sound_channels = {}
         self.audio_schedulers = []
+        self._line_token_by_channel: dict[int, int] = {}
+        self._line_queue_by_channel: dict[int, list] = {}
+        self._line_active_by_channel: dict[int, bool] = {}
+        self._line_on_done_by_channel: dict = {}
+        self._current_actor_talking: int = -1
         Cursors.load_all()
         self.Cursors = Cursors
 
@@ -199,6 +206,7 @@ class Engine:
             if hasattr(self.current_room, "destroy"):
                 self.current_room.destroy()
 
+        self.clear_lines()
         self.audio.stop_all_but(self.music.music_channel)
         if screen_text := self.screen_text[0]:
             self.screen_text = (None, None)
@@ -212,12 +220,14 @@ class Engine:
         Resources.ROOM_PATH = factory[1]
         self.current_room = factory[0](self)
         self.game_state.set_flag("g_currentRoom", room_id)
+        self.current_skipable = None
 
         if hasattr(self.current_room, "enter"):
             self.current_room.enter()
             if skip_enter_func is True:
                 if self.current_skipable and callable(self.current_skipable):
                     self.current_skipable(self)
+                    self.current_skipable = None
 
         self.current_room.screen = self.screen
 
@@ -307,6 +317,14 @@ class Engine:
                     pygame.time.set_timer(self.SCREEN_TEXT_EVENT, 0)  # Stop the timer
                 elif event.type == pygame.MOUSEMOTION:
                     self._handle_mouse_motion(event)
+                elif event.type == ActorEvents.ACTOR_UPDATE:
+                    if event.update_type is "new" or event.update_type is "change":
+                        actor = self.actor_table.get(event.actor_id, None)
+                        if actor is not None:
+                            print(f'[core.py] ACTOR_UPDATE event received {event.update_type} for actor_id: {event.actor_id}')
+                            if actor.actor_can_flap_while_change == False and self.is_actor_talking(actor_id=event.actor_id):
+                                if self.in_close_up == False:
+                                    self.stop_line(channel=0)
                 else:
                     if not self.key_input_blocked:
                         if event.type == pygame.KEYDOWN:
@@ -370,7 +388,7 @@ class Engine:
         pygame.mouse.set_cursor(cursor)
 
     def _handle_keydown(self, event):
-        # print("[core.py] _handle_keydown()> unicode=", event.unicode, "key=", event.key)
+        print("[core.py] _handle_keydown()> unicode=", event.unicode, "key=", event.key)
         if event.key == 27 or event.key == 115: #Escape Key or S Key
             pygame.key.set_repeat(0)
             if self.current_skipable and callable(self.current_skipable):
@@ -378,7 +396,9 @@ class Engine:
                     self.current_skipable = None
             else:
                 print("[core.py] Escape Pressed - no skipable, do a stop-line")
-
+                self.stop_line(channel=0)
+        if event.key == 46: # Period Key
+            self.skip_line(channel=0)
         if event.key == 1073742048: #CTRL Key
             pygame.key.set_repeat(80)
 
@@ -503,22 +523,57 @@ class Engine:
         if showCursor is True:
             self.show_cursor()
 
+    def close_up(self, bg, hideCursor=True):
+        self.stop_line(channel=0)
+        
+        if self.interface:
+            self.interface.remove_all_room_actors()
+            self.interface.disable_all_clickpoints()
+        if self.current_room:
+            self.current_room.background = bg
+            self.current_room.background_rect = bg.get_rect()
+            self.current_room.hide_current_sprites()
+        
+        self.in_close_up = True
+        self.game_state.set_flag("g_interfaceVisible", False)
+
+        if hideCursor == True:
+            self.hide_cursor(inputBlocked=True)
+
+    def hide_close_up(self, showCursor=True):
+        if self.interface:
+            self.interface.enable_all_clickpoints()
+        if self.current_room:
+            self.current_room.background = self.current_room.restore_background
+            self.current_room.background_rect = self.current_room.restore_background.get_rect()
+            self.current_room.show_hidden_items()
+
+        self.in_close_up = False
+        self.game_state.set_flag("g_interfaceVisible", True)
+
+        if showCursor == True:
+            self.show_cursor(inputBlocked=False)
+
     def show_text(
         self,
         text: str,
         color: tuple = (255, 255, 255),
         duration: float = 0,
         position: tuple[int, int] = (4, 4),
-        outline_px: int = 2
+        outline_px: int = 2,
+        force_show: bool = False,
     ) -> None:
         if not text:
             return
         
         screen_text_enabled = self.game_state.get_flag("g_screenTextEnabled")
+        if force_show is True:
+            screen_text_enabled = True
+            
         if screen_text_enabled != True:
             return
 
-        if duration <= 0:
+        if duration == 0:
             words = len(text.split())
             duration = max(1200, words * 300)
 
@@ -552,7 +607,8 @@ class Engine:
             self.screen.blit(surf, rect)
 
         pygame.display.flip()
-        pygame.time.set_timer(self.SCREEN_TEXT_EVENT, int(duration))
+        if duration >= 0:
+            pygame.time.set_timer(self.SCREEN_TEXT_EVENT, int(duration))
 
     def render_text_outline(
             self,
@@ -628,13 +684,17 @@ class Engine:
             surfaces.append(surf)
 
         return surfaces
+    
+    def remove_text(self):
+        self.screen_text = (None, None)
+        pygame.time.set_timer(self.SCREEN_TEXT_EVENT, 0)  # Stop the timer
+            
     def toggle_screen_text(self):
         screen_text_enabled = self.game_state.get_flag("g_screenTextEnabled")
         if screen_text_enabled == True:
             self.game_state.set_flag("g_screenTextEnabled", False)
             if self.screen_text[0] is not None:
-                self.screen_text = (None, None)
-                pygame.time.set_timer(self.SCREEN_TEXT_EVENT, 0)  # Stop the timer
+                self.remove_text()
         else:
             self.game_state.set_flag("g_screenTextEnabled", True)
 
@@ -703,6 +763,7 @@ class Engine:
             # clear sprite groups if the room has them
             if hasattr(self.current_room, "actors"):
                 self.current_room.actors.empty()
+                self._current_actor_talking = -1
 
             if hasattr(self.current_room, "hotspots"):
                 self.current_room.hotspots.clear()
@@ -733,26 +794,320 @@ class Engine:
         handle: AudioHandle
         subtitle: str | None
         
-    def play_talkie(self, filename: str, soundChannel: int = 0, loop: bool = False):
+    def play_talkie(self, filename: str, soundChannel: int = 0, loop: bool = False, preload: bool = False):
         filepath = f"assets/audio/talkies/{filename}"
         sound = self.audio.load(filepath)
+        if preload:
+            return self.audio.preload_sound(sound, filename, soundChannel, loop)
         return self.audio.play(sound, filename, soundChannel, loop)
 
-    def say_line(self, key: str, *, color=(255, 165, 255), channel: int = 0, show_subtitles: bool = True):
-        # Defaults if no entry exists
+    def _next_line_token(self, channel: int) -> int:
+        t = self._line_token_by_channel.get(channel, 0) + 1
+        self._line_token_by_channel[channel] = t
+        return t
+    
+    def say_line(self, key, *, color=(255,165,255), actor_id=1, look_at="normal",
+                channel: int = 0, show_subtitles: bool = True, on_done=None) -> TalkieResult | None:
+        # Remove any existing text first
+        if self.screen_text[0] is not None:
+            self.remove_text()
+
+        self._current_actor_talking = actor_id
+        
+        # SEQUENCE MODE
+        if isinstance(key, (list, tuple)):
+            return self._say_line_sequence(
+                key, # type: ignore
+                color=color,
+                actor_id=actor_id,
+                look_at=look_at,
+                channel=channel,
+                show_subtitles=show_subtitles,
+                on_done=on_done,
+            )
+        
+        # SINGLE LINE MODE
+        return self._say_one_line(
+            key,
+            color=color,
+            actor_id=actor_id,
+            look_at=look_at,
+            channel=channel,
+            show_subtitles=show_subtitles,
+            token=self._next_line_token(channel),
+            on_done=on_done,
+        )
+    
+    def _say_line_sequence(
+        self,
+        items: list,
+        *,
+        color=(255,165,255),
+        actor_id=1,
+        look_at="normal",
+        channel: int = 0,
+        show_subtitles: bool = True,
+        on_done=callable,
+    ):
+        # New token for the whole sequence (so skip cancels pending steps)
+        token = self._next_line_token(channel)
+
+        # Build a queue of "steps"
+        # Steps are tuples: ("say", key, actor_id, look_at) or ("cmd", {...})
+        queue: list[tuple] = []
+        current_actor = actor_id
+        current_look = look_at
+
+        for it in items:
+            if isinstance(it, str):
+                queue.append(("say", it, current_actor, current_look))
+            elif isinstance(it, dict):
+                # command dicts
+                if "changeTalker" in it:
+                    current_actor = int(it["changeTalker"])
+                if "look_at" in it:
+                    current_look = str(it["look_at"])
+                # you can add more commands later (pause, wait_ms, etc.)
+            else:
+                raise TypeError(f"Unsupported sequence item: {it} ({type(it).__name__})")
+
+        # Store/replace queue for this channel
+        self._line_queue_by_channel[channel] = queue
+        self._line_active_by_channel[channel] = True
+        self._line_on_done_by_channel[channel] = on_done
+
+        def play_next():
+            # If sequence was cancelled (skip / new say_line), stop.
+            if self._line_token_by_channel.get(channel) != token:
+                if on_done:
+                    on_done()
+                self._line_active_by_channel[channel] = False
+                return
+
+            q = self._line_queue_by_channel.get(channel, [])
+            if not q:
+                # Sequence complete
+                self._line_active_by_channel[channel] = False
+                if on_done:
+                    on_done()
+                return
+
+            step = q.pop(0)
+            self._line_queue_by_channel[channel] = q
+
+            kind = step[0]
+            if kind != "say":
+                # (we’re not pushing cmd steps into queue in this version)
+                return play_next()
+
+            _, one_key, one_actor_id, one_look = step
+
+            # Play ONE line, and when it ends, call play_next()
+            self._say_one_line(
+                one_key,
+                color=color,
+                actor_id=one_actor_id,
+                look_at=one_look,
+                channel=channel,
+                show_subtitles=show_subtitles,
+                token=token,
+                on_done=play_next,
+            )
+
+        return play_next()
+
+        # Return something predictable. You can return None or a small object.
+        return None
+
+    def _say_one_line(
+        self,
+        key: str,
+        *,
+        color=(255,165,255),
+        actor_id=1,
+        look_at="normal",
+        channel: int = 0,
+        show_subtitles: bool = True,
+        token: int,
+        on_done=None,   # called after audio finishes
+    ):
         filename = key
         subtitle = None
 
         talkie_info = self.talkie_table.get(key)
         if talkie_info:
-            filename, subtitle = talkie_info  # (audio_filename, subtitle_text)
+            filename, subtitle = talkie_info
 
-        handle = self.play_talkie(filename, soundChannel=channel, loop=False)
+        handle = self.play_talkie(filename, soundChannel=channel, loop=False, preload=False)
+
+        def guarded_done():
+            # Only run if this sequence is still current
+            if self._line_token_by_channel.get(channel) != token:
+                return
+            # Clean text, then move on
+            self.remove_text()
+            if on_done:
+                on_done()
+
+        actor = self.actor_table.get(actor_id)
+        if actor is None:
+            handle.on_end_cb = guarded_done
+            if show_subtitles and subtitle:
+                self.show_text(subtitle, color=color, duration=-1)
+            return self.TalkieResult(handle, subtitle)
+
+        # If already flapping and need to change gaze, stop flap first
+        if actor.flapping_mouth and actor.currently_looking_at != look_at:
+            actor.stop_mouth_flap(self, {}, do_blink=False)
+
+        def safe_play():
+            if self._line_token_by_channel.get(channel) != token:
+                return
+            handle.play()
+
+        if actor.blink_required_before_flap and actor.currently_looking_at != look_at:
+            handle.pause()
+
+            def on_blink_done():
+                if self._line_token_by_channel.get(channel) != token:
+                    if actor.flapping_mouth:
+                        return
+                    return actor.look_at("normal")
+
+                # IMPORTANT: pass guarded_done so end triggers next line
+                actor.flap_mouth(handle, guarded_done)
+                safe_play()
+
+            has_blinked = actor.blink(look_at, on_blink_done)
+            if has_blinked is False:
+                actor.flap_mouth(handle, guarded_done)
+                safe_play()
+        else:
+            actor.flap_mouth(handle, guarded_done)
 
         if show_subtitles and subtitle:
-            self.show_text(subtitle, color=color)
+            self.show_text(subtitle, color=color, duration=-1)
 
         return self.TalkieResult(handle, subtitle)
+
+
+    def stop_line(self, channel: int = 0, invalidate_pending_cbs: bool = True):
+        #queue = self._line_queue_by_channel.get(channel)
+        #if not queue:
+            #return
+        
+        # Invalidate any pending "resume" callbacks for this channel
+        self._next_line_token(channel)
+        self.audio.stop_channel(channel)
+        self.remove_text()
+        self._current_actor_talking = -1
+
+    def skip_line(self, channel: int = 0):
+        if not self._line_active_by_channel.get(channel):
+            self.audio.stop_channel(channel)
+            self.remove_text()
+            return
+
+        # Invalidate current audio callbacks
+        token = self._next_line_token(channel)
+
+        # Stop sound + visuals
+        self.audio.stop_channel(channel)
+        self.remove_text()
+
+        # Stop actor animation
+        queue = self._line_queue_by_channel.get(channel)
+        if queue:
+            _, _, actor_id, _ = queue[0]
+            actor = self.actor_table.get(actor_id)
+            if actor and actor.flapping_mouth:
+                actor.stop_mouth_flap(self, {}, do_blink=False)
+
+        # Advance using the SAME logic as normal flow
+        self._advance_sequence(channel, token)
+
+    def _advance_sequence(self, channel: int, token: int):
+        # Sequence was cancelled
+        if self._line_token_by_channel.get(channel) != token:
+            self._line_active_by_channel[channel] = False
+            return
+
+        queue = self._line_queue_by_channel.get(channel, [])
+        while queue:
+            step = queue.pop(0)
+            self._line_queue_by_channel[channel] = queue
+
+            kind = step[0]
+
+            def advance_sequence():
+                self._advance_sequence(channel, token)
+
+            if kind == "say":
+                _, key, actor_id, look_at = step
+                self._say_one_line(
+                    key,
+                    actor_id=actor_id,
+                    look_at=look_at,
+                    channel=channel,
+                    token=token,
+                    on_done=advance_sequence,
+                )
+                return  # wait for this say to finish
+
+            else:
+                # COMMAND STEP — execute immediately
+                self._execute_command_step(step)
+                continue
+
+        # End of sequence
+        self._line_active_by_channel[channel] = False
+        self._finish_sequence(channel, token)
+        
+    def _execute_command_step(self, step: tuple):
+        kind = step[0]
+
+        if kind == "cmd":
+            cmd = step[1]
+            if "changeTalker" in cmd:
+                self._current_actor_talking = int(cmd["changeTalker"])
+            if "look_at" in cmd:
+                actor = self.actor_table.get(self._current_actor_talking)
+                if actor:
+                    actor.look_at(cmd["look_at"])
+
+    def _finish_sequence(self, channel: int, token: int):
+        if self._line_token_by_channel.get(channel) != token:
+            return
+
+        self._line_active_by_channel[channel] = False
+
+        on_done = self._line_on_done_by_channel.pop(channel, None)
+        if callable(on_done):
+            on_done()
+
+    def clear_lines(self, channel: int = 0):
+        if channel in self._line_queue_by_channel:
+            del self._line_queue_by_channel[channel]
+        self._current_actor_talking = -1
+
+    def is_actor_in_talkie_queue(self, channel: int = 0, actor_id: int = 1) -> bool:
+        # print(f"[core.py] is_actor_in_talkie_queue()> channel={channel}, actor_id={actor_id}")
+
+        queue = self._line_queue_by_channel.get(channel)
+        if not queue:
+            return False
+
+        token, line, queued_actor_id, eye_state = queue[0]
+        if queued_actor_id == actor_id:
+            return True
+        
+        return False
+    
+    def is_actor_talking(self, channel: int = 0, actor_id: int = 1) -> bool:
+        if self._current_actor_talking == actor_id:
+            return True
+        
+        return self.is_actor_in_talkie_queue(channel, actor_id)
 
 
     def play_sound(self, filename, soundChannel=-1, loop: bool = False):

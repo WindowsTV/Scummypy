@@ -231,12 +231,16 @@ class Costume:
     # Public controls (layered)
     # -----------------------------
     def play_layer(self, layer_name: str, play_at: str | int | None = None) -> None:
-        sheet = self.layer_sheets[layer_name]
+        sheet = self.layer_sheets.get(layer_name, None)
+        if sheet is None:
+            return
+        
         st = self._layer_state[layer_name]
 
         st.paused = False
         st.t = 0.0
-
+        st.event_fired = False 
+        
         # raw
         if play_at is None or isinstance(play_at, int):
             st.mode = "raw"
@@ -258,7 +262,10 @@ class Costume:
         st.raw_idx = self._clamp(int(first), 0, len(sheet.frames) - 1)
 
     def stop_layer(self, layer_name: str, frame: Optional[int] = None) -> None:
-        sheet = self.layer_sheets[layer_name]
+        sheet = self.layer_sheets.get(layer_name, None)
+        if sheet is None:
+            return
+        
         st = self._layer_state[layer_name]
 
         st.paused = True
@@ -269,6 +276,10 @@ class Costume:
             st.anim_name = None
             st.anim_idx = 0
             st.raw_idx = self._clamp(frame, 0, len(sheet.frames) - 1)
+    
+    def stop_layers(self, *layer_names: str, frame: Optional[int] = None) -> None:
+        for layer_name in layer_names:
+            self.stop_layer(layer_name, frame)
 
     def play_all_layers(self, play_at: str | int | None = None) -> None:
         for name in self.layer_order:

@@ -34,6 +34,11 @@ def enter(room, engine) -> None:
     print("Entered", ROOM_NAME)
     engine.game_state.set_flag("g_interfaceVisible", True) 
 
+    room.entered_from = engine.game_state.get_flag("g_lastRoom")
+    if room.entered_from == 2:
+        print(f'[street.py] you came from the Goat room!')
+    
+
 def onExitToSGoatRoom(room, engine) -> None:
     print("Bye-Bye!")
     exit(room, exit_to=2)

@@ -182,8 +182,35 @@ class AudioManager:
 
         self.sounds_playing.append(handle)
         return handle
-
     
+    def preload_sound(self, sound: pygame.mixer.Sound, filename, soundChannel: int, loop: bool = False) -> AudioHandle:
+        if soundChannel != -1 and self.channels[soundChannel]:
+            channel = self.channels[soundChannel]      # << always honor explicit channel
+        else:
+            channel = pygame.mixer.find_channel()
+
+        if channel is None:
+            channel = self.channels[-1]
+
+        # 2. Remove any old handles tied to this channel (music or sfx)
+        to_keep = []
+        for h in self.sounds_playing:
+            if h.channel is channel:
+                if h.audioEventScheduler:
+                    h.audioEventScheduler.clear_events()
+                pass
+            else:
+                to_keep.append(h)
+        self.sounds_playing = to_keep
+
+        # 3. Create new handle
+        handle = AudioHandle(channel, sound)
+        handle.set_identity(filename)
+        channel.set_endevent(self.SOUND_END)
+
+        self.sounds_playing.append(handle)
+        return handle
+        
     def on_audio_end(self):
         """Remove handles whose channel has stopped, then trigger callbacks.
 
@@ -226,7 +253,17 @@ class AudioManager:
     def stop_all(self):
         """Stop everything playing."""
         pygame.mixer.stop()
-
+        
+    def stop_channel(self, channel_id: int):
+        """Stop a specific channel."""
+        if channel_id < 0 or channel_id >= len(self.channels):
+            return
+        ch = self.channels[channel_id]
+        handle = self.find_by_channel_index(channel_id)
+        if handle:
+            handle.stop()
+        ch.stop()
+        
     def stop_all_but(self, channel_id_to_ignore=-1):
         """Stop every channel EXCEPT the one passed in."""
 

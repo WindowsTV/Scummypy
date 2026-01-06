@@ -50,7 +50,7 @@ def enter(room, engine) -> None:
     room.radioClickpoint = room.setup_clickpoint(radioHotspot, onRadioClick)
 
 def onGasGaugeClick(room, engine):
-    _line_said = engine.say_line("putt_0001")
+    _line_said = engine.say_line("putt_0001", actor_id=1)
     print(_line_said.subtitle)
 
 def onMenuHotspotClick(room, engine):
